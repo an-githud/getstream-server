@@ -100,10 +100,10 @@ app.post('/token', async (req, res) => {
     if (mode === 'dm') usersToUpsert.push({ id: peerId, role: 'user' });
     await client.upsertUsers(usersToUpsert);
 
-    // (2) tạo/get call: BẮT BUỘC truyền created_by_id khi server-side auth
+    // (2) tạo/get call: PHẢI truyền created_by_id khi server-side auth
     const call = client.video.call(CALL_TYPE, callId);
 
-    // Có thể set sẵn members lúc tạo. Không bắt buộc, nhưng tiện để phân quyền/notification.
+    // Có thể set sẵn members lúc tạo (chỉ áp khi call mới).
     const initialMembers =
       mode === 'dm'
         ? [{ user_id: userId, role: 'call_member' }, { user_id: peerId }]
@@ -111,12 +111,11 @@ app.post('/token', async (req, res) => {
 
     await call.getOrCreate({
       data: {
-        created_by_id: userId,            // <-- FIX QUAN TRỌNG
-        members: initialMembers,          // tuỳ chọn
-        custom: { type: mode },           // metadata tuỳ ý
+        created_by_id: userId,  // <-- quan trọng
+        members: initialMembers,
+        custom: { type: mode },
       },
     });
-    // (Docs minh hoạ dùng created_by_id khi tạo/getOrCreate call). :contentReference[oaicite:1]{index=1}
 
     // (3) kiểm tra & áp luật dưới lock (giới hạn số slot & đúng cặp trong DM)
     const result = await withLock(`call:${callId}`, async () => {
@@ -131,22 +130,29 @@ app.post('/token', async (req, res) => {
         if (total >= maxSeats) break;
       } while (next);
 
+      const isMember = existing.includes(userId);
+
       if (mode === 'dm') {
         const allowed = new Set([userId, peerId]);
-        const stranger = existing.find((u) => !allowed.has(u));
+        const stranger = existing.find(u => !allowed.has(u));
         if (stranger) return { ok: false, code: 'dm_mismatch' };
-
-        if (existing.length >= 2 && !existing.includes(userId)) {
-          return { ok: false, code: 'room_full' };
-        }
       }
 
-      if (total >= maxSeats) return { ok: false, code: 'room_full' };
+      // Chỉ chặn khi đã đủ chỗ VÀ người gọi không phải thành viên
+      if (total >= maxSeats && !isMember) {
+        return { ok: false, code: 'room_full' };
+      }
 
-      // Bổ sung/đặt role cho caller (an toàn nếu lúc tạo chưa set)
-      await call.updateCallMembers({
-        update_members: [{ user_id: userId, role: 'call_member' }],
-      });
+      // (4) Bổ sung hoặc cập nhật role cho caller
+      if (!isMember) {
+        await call.updateCallMembers({
+          add_members: [{ user_id: userId, role: 'call_member' }],
+        });
+      } else {
+        await call.updateCallMembers({
+          update_members: [{ user_id: userId, role: 'call_member' }],
+        });
+      }
 
       return { ok: true };
     });
@@ -159,7 +165,7 @@ app.post('/token', async (req, res) => {
       return res.status(403).json({ error: code, message: msg });
     }
 
-    // (4) phát token cho user (1h)
+    // (5) phát token cho user (1h)
     const token = client.generateUserToken({ user_id: userId, validity_in_seconds: 3600 });
 
     return res.json({
