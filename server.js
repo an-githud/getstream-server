@@ -3,13 +3,13 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import { StreamClient } from '@stream-io/node-sdk';
 
-// Load env (Render sẽ lấy từ dashboard; dòng này vẫn OK local)
+// Load env (local). Trên Render bạn set biến môi trường trong dashboard.
 dotenv.config({ path: 'stream_api.env' });
 
 const app = express();
 app.use(bodyParser.json());
 
-// Log request khi không ở production
+// Log gọn khi không ở production
 app.use((req, _res, next) => {
   if (process.env.NODE_ENV !== 'production') {
     console.log('→', req.method, req.url);
@@ -22,7 +22,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Config
+// ==== Config ====
 const API_KEY = process.env.STREAM_API_KEY;
 const API_SECRET = process.env.STREAM_API_SECRET;
 const CALL_TYPE = process.env.CALL_TYPE || 'default';
@@ -37,30 +37,26 @@ if (!API_KEY || !API_SECRET) {
 
 const client = new StreamClient(API_KEY, API_SECRET);
 
-// ===== In-memory lock theo callId (1 instance). Nhiều instance → dùng Redis/Redlock.
+// ==== In-memory lock (1 instance). Nhiều instance -> dùng Redis/Redlock. ====
 const locks = new Map();
-/** Đảm bảo các thao tác trên cùng 1 key chạy tuần tự */
 function withLock(key, fn) {
   const prev = locks.get(key) || Promise.resolve();
   let release;
   const p = new Promise((r) => (release = r));
   locks.set(key, prev.then(() => p));
-  // chạy fn sau prev; luôn release khi xong để chuỗi tiếp
   return prev.then(fn).finally(() => release());
 }
 
-// ===== Helpers: chuẩn hoá ID hợp lệ cho Stream (a-z, 0-9, _-)
+// ==== Helpers: chuẩn hoá ID & tạo callId cho DM ====
 function safeId(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 }
-
-// Tạo callId ổn định cho DM, KHÔNG dùng dấu ":" (không hợp lệ)
 function dmCallId(a, b) {
   const [x, y] = [safeId(a), safeId(b)].sort();
-  return `dm_${x}__${y}`;
+  return `dm_${x}__${y}`; // không dùng dấu :
 }
 
-// Health
+// Health check
 app.get('/', (_req, res) => res.send('OK'));
 
 /**
@@ -71,6 +67,8 @@ app.get('/', (_req, res) => res.send('OK'));
  *  - name?: string
  *  - peerId?: string (bắt buộc khi mode="dm")
  *  - callId?: string (bắt buộc khi mode="group")
+ *
+ * Trả về: { token, apiKey, callType, callId, mode, user }
  */
 app.post('/token', async (req, res) => {
   const { userId, name, mode, callId: callIdRaw, peerId } = req.body || {};
@@ -78,33 +76,49 @@ app.post('/token', async (req, res) => {
     return res.status(400).json({ error: 'invalid_body', message: 'userId & mode required' });
   }
 
-  // Xác định callId & maxSeats
+  // Xác định callId + giới hạn chỗ
   let callId, maxSeats;
   if (mode === 'dm') {
     if (!peerId) {
       return res.status(400).json({ error: 'invalid_body', message: 'peerId required for dm' });
     }
-    callId = dmCallId(userId, peerId);        // vd: dm_user123__user456
+    callId = dmCallId(userId, peerId);
     maxSeats = MAX_SEATS_DM;
   } else if (mode === 'group') {
     if (!callIdRaw) {
       return res.status(400).json({ error: 'invalid_body', message: 'callId required for group' });
     }
-    callId = safeId(callIdRaw);               // làm sạch luôn cho chắc
+    callId = safeId(callIdRaw);
     maxSeats = MAX_SEATS_GROUP;
   } else {
     return res.status(400).json({ error: 'invalid_mode', message: 'mode must be "dm" or "group"' });
   }
 
   try {
-    // (1) đảm bảo user tồn tại
-    await client.upsertUsers([{ id: userId, name, role: 'user' }]);
+    // (1) đảm bảo user (và peer trong chế độ DM) đã tồn tại
+    const usersToUpsert = [{ id: userId, name, role: 'user' }];
+    if (mode === 'dm') usersToUpsert.push({ id: peerId, role: 'user' });
+    await client.upsertUsers(usersToUpsert);
 
-    // (2) đảm bảo call tồn tại TRƯỚC khi query/update members
+    // (2) tạo/get call: BẮT BUỘC truyền created_by_id khi server-side auth
     const call = client.video.call(CALL_TYPE, callId);
-    await call.getOrCreate({ data: { custom: { type: mode } } });
 
-    // (3) Đếm & áp luật dưới lock
+    // Có thể set sẵn members lúc tạo. Không bắt buộc, nhưng tiện để phân quyền/notification.
+    const initialMembers =
+      mode === 'dm'
+        ? [{ user_id: userId, role: 'call_member' }, { user_id: peerId }]
+        : [{ user_id: userId, role: 'call_member' }];
+
+    await call.getOrCreate({
+      data: {
+        created_by_id: userId,            // <-- FIX QUAN TRỌNG
+        members: initialMembers,          // tuỳ chọn
+        custom: { type: mode },           // metadata tuỳ ý
+      },
+    });
+    // (Docs minh hoạ dùng created_by_id khi tạo/getOrCreate call). :contentReference[oaicite:1]{index=1}
+
+    // (3) kiểm tra & áp luật dưới lock (giới hạn số slot & đúng cặp trong DM)
     const result = await withLock(`call:${callId}`, async () => {
       let total = 0, next;
       const existing = [];
@@ -112,14 +126,14 @@ app.post('/token', async (req, res) => {
       do {
         const page = await call.queryMembers({ limit: 100, next });
         total += page.members.length;
-        existing.push(...page.members.map(m => m.user_id));
+        existing.push(...page.members.map((m) => m.user_id));
         next = page.next ?? undefined;
         if (total >= maxSeats) break;
       } while (next);
 
       if (mode === 'dm') {
         const allowed = new Set([userId, peerId]);
-        const stranger = existing.find(u => !allowed.has(u));
+        const stranger = existing.find((u) => !allowed.has(u));
         if (stranger) return { ok: false, code: 'dm_mismatch' };
 
         if (existing.length >= 2 && !existing.includes(userId)) {
@@ -129,7 +143,7 @@ app.post('/token', async (req, res) => {
 
       if (total >= maxSeats) return { ok: false, code: 'room_full' };
 
-      // (4) cấp role cho caller (JOIN_CALL)
+      // Bổ sung/đặt role cho caller (an toàn nếu lúc tạo chưa set)
       await call.updateCallMembers({
         update_members: [{ user_id: userId, role: 'call_member' }],
       });
@@ -145,7 +159,7 @@ app.post('/token', async (req, res) => {
       return res.status(403).json({ error: code, message: msg });
     }
 
-    // (5) phát token (1h)
+    // (4) phát token cho user (1h)
     const token = client.generateUserToken({ user_id: userId, validity_in_seconds: 3600 });
 
     return res.json({
