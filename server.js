@@ -3,18 +3,20 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import { StreamClient } from '@stream-io/node-sdk';
 
-// 🔧 Đọc env từ file hiện có của bạn
+// 🔧 Load env từ file riêng (tuỳ bạn)
 dotenv.config({ path: 'stream_api.env' });
 
 const app = express();
 app.use(bodyParser.json());
 
-// 🔒 Không log body/headers ở production
+// 🔒 Log gọn gàng khi không ở production
 app.use((req, _res, next) => {
   if (process.env.NODE_ENV !== 'production') {
     console.log('→', req.method, req.url);
     if (req.body && Object.keys(req.body).length) {
-      console.log('  body:', JSON.stringify(req.body));
+      const safeBody = { ...req.body };
+      if (safeBody.token) safeBody.token = '<hidden>';
+      console.log('  body =', safeBody);
     }
   }
   next();
@@ -32,11 +34,12 @@ if (!API_KEY || !API_SECRET) {
   throw new Error('Missing STREAM_API_KEY / STREAM_API_SECRET');
 }
 
-// 🧩 Stream client
+// 🧩 Stream client (giống file của bạn)
 const client = new StreamClient(API_KEY, API_SECRET);
 
-// 🔐 In-memory lock theo callId (nếu nhiều instance → dùng Redis + Redlock)
+// 🔐 In-memory lock theo callId (nếu nhiều instance → dùng Redis/Redlock)
 const locks = new Map();
+/** Đảm bảo các thao tác trên cùng 1 callId chạy tuần tự */
 function withLock(key, fn) {
   const prev = locks.get(key) || Promise.resolve();
   let release;
@@ -60,13 +63,8 @@ function dmCallId(a, b) {
  *  - peerId?: string (bắt buộc khi mode="dm")
  *  - callId?: string (bắt buộc khi mode="group")
  *
- * Flow (cả 2 mode):
- *  1) upsert user
- *  2) (LOCK theo callId) queryMembers (phân trang) → kiểm tra luật:
- *      - dm: chỉ cho đúng 2 user của cặp; không cho người lạ; tối đa 2
- *      - group: tối đa MAX_SEATS_GROUP
- *  3) thêm user vào members với role 'call_member'
- *  4) phát token JWT cho user
+ * Trả về:
+ *  { token, apiKey, callType, callId, mode, user? }
  */
 app.post('/token', async (req, res) => {
   const { userId, name, mode, callId: callIdRaw, peerId } = req.body || {};
@@ -92,9 +90,13 @@ app.post('/token', async (req, res) => {
     // (1) đảm bảo user tồn tại
     await client.upsertUsers([{ id: userId, name, role: 'user' }]);
 
+    // (2) đảm bảo call tồn tại TRƯỚC khi query/update members
     const call = client.video.call(CALL_TYPE, callId);
+    await call.getOrCreate({
+      data: { custom: { type: mode } }, // tuỳ chọn: metadata của call
+    });
 
-    // (2) Đếm & áp luật dưới lock
+    // (3) Đếm & áp luật dưới lock
     const result = await withLock(`call:${callId}`, async () => {
       let total = 0, next;
       const existing = [];
@@ -123,7 +125,7 @@ app.post('/token', async (req, res) => {
         return { ok: false, code: 'room_full' };
       }
 
-      // (3) Thêm/cập nhật role 'call_member' (để JOIN_CALL)
+      // (4) Thêm/cập nhật role 'call_member' (để JOIN_CALL)
       await call.updateCallMembers({
         update_members: [{ user_id: userId, role: 'call_member' }],
       });
@@ -140,17 +142,31 @@ app.post('/token', async (req, res) => {
       return res.status(403).json({ error: code, message: msg });
     }
 
-    // (4) phát token cho user (validity 1h)
+    // (5) phát token cho user (validity 1h)
     const token = client.generateUserToken({ user_id: userId, validity_in_seconds: 3600 });
-    return res.json({ token, apiKey: API_KEY, callType: CALL_TYPE, callId, mode });
+
+    return res.json({
+      token,
+      apiKey: API_KEY,
+      callType: CALL_TYPE,
+      callId,
+      mode,
+      user: { id: userId, name },
+    });
   } catch (err) {
-    console.error('Token error:', err);
-    return res.status(500).json({ error: 'server_error' });
+    console.error('Token error:', {
+      name: err?.name,
+      message: err?.message,
+      status: err?.status || err?.response?.status,
+      data: err?.response?.data || err?.body,
+    });
+    const status = err?.status || err?.response?.status || 500;
+    return res.status(status).json({ error: 'server_error', message: err?.message });
   }
 });
 
 /**
- * (Tuỳ chọn) Route cũ để test tạo user/token "trần" không giới hạn.
+ * (Tuỳ chọn) Route test tạo user/token "trần" không giới hạn.
  * Android NÊN dùng /token ở trên để được kiểm soát slot.
  */
 app.post('/create-user', async (req, res) => {
