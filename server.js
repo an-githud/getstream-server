@@ -1,48 +1,49 @@
-import express from 'express';
-import bodyParser from 'body-parser';
-import dotenv from 'dotenv';
-import { StreamClient } from '@stream-io/node-sdk';
+import express from "express";
+import bodyParser from "body-parser";
+import jwt from "jsonwebtoken";
+import dotenv from "dotenv";
 
 dotenv.config();
 dotenv.config({ path: './stream_api.env' });
-
 const STREAM_API_KEY = process.env.STREAM_API_KEY;
 const STREAM_API_SECRET = process.env.STREAM_API_SECRET;
 
 if (!STREAM_API_KEY || !STREAM_API_SECRET) {
-  console.error('❌ Missing Stream credentials.');
+  console.error("❌ Missing Stream credentials. Add STREAM_API_KEY and STREAM_API_SECRET to .env");
   process.exit(1);
 }
-
-// ✅ Khởi tạo client mới
-const client = new StreamClient(STREAM_API_KEY, STREAM_API_SECRET);
 
 const app = express();
 app.use(bodyParser.json());
 
-// Health check
-app.get('/', (req, res) => {
-  res.send('Server is running! Use POST /create-user to get a token.');
+// health check
+app.get("/", (req, res) => {
+  res.send("Server is running! POST /create-user with { userId, name }");
 });
 
-app.post('/create-user', (req, res) => {
-  try {
-    const userId = req.body?.userId || "trian020690";
-    const name = req.body?.name || "Tri An";
+// endpoint tạo token
+app.post("/create-user", (req, res) => {
+  const { userId, name } = req.body || {};
 
-    // ✅ Tạo token cho video call
-    const token = client.createToken(userId);
-
-    return res.json({
-      apiKey: STREAM_API_KEY,
-      token,
-      userId,
-      name
-    });
-  } catch (err) {
-    console.error('Error creating token:', err);
-    return res.status(500).json({ error: err.message || String(err) });
+  if (!userId) {
+    return res.status(400).json({ error: "userId is required" });
   }
+
+  // payload phải có user_id
+  const payload = { user_id: String(userId) };
+
+  // ký token
+  const token = jwt.sign(payload, STREAM_API_SECRET, {
+    algorithm: "HS256",
+    expiresIn: "1h", // token hết hạn trong 1h
+  });
+
+  return res.json({
+    apiKey: STREAM_API_KEY,
+    token,
+    userId,
+    name,
+  });
 });
 
 const port = process.env.PORT || 3000;
