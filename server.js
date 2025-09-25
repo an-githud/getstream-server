@@ -45,11 +45,14 @@ app.post('/create-user', (req, res) => {
     // Create a JWT expected by Stream: payload must contain user_id
     const payload = { user_id: String(userId) };
 
-    // You can add other optional claims here, for example:
-    // payload = { ...payload, name }
+    // Tạo token có hạn (ví dụ 1 giờ)
+    const token = jwt.sign(payload, STREAM_API_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: '1h'   // bạn có thể đổi thành '24h' hoặc số giây
+    });
 
-    // Create token (no expiration by default; you can set expiresIn if desired)
-    const token = jwt.sign(payload, STREAM_API_SECRET, { algorithm: 'HS256' });
+// Giải mã để lấy exp (epoch seconds)
+    const decoded = jwt.decode(token);
 
     return res.json({ apiKey: STREAM_API_KEY, token, userId: String(userId) });
   } catch (err) {
@@ -63,3 +66,27 @@ app.listen(port, () => {
   console.log(`\n🚀 Server is running at http://localhost:${port}`);
   console.log(`Using STREAM_API_KEY=${STREAM_API_KEY ? STREAM_API_KEY.slice(0,6) + '...' : 'missing'}`);
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
