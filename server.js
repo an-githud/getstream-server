@@ -17,7 +17,7 @@ let refreshTokens = [];
 
 // Hàm tạo Access Token (ngắn hạn) 15m   10s
 function generateAccessToken(payload) {
-  return jwt.sign(payload, ACCESS_TOKEN_SECRET, { expiresIn: "10s" });
+  return jwt.sign(payload, ACCESS_TOKEN_SECRET, { expiresIn: "60m" });
 }
 
 // Hàm tạo Refresh Token (dài hạn)
