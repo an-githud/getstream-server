@@ -5,9 +5,9 @@ import dotenv from "dotenv";
 import { StreamClient } from "@stream-io/node-sdk";
 
 
-// Load biến môi trường
+// Load biến môi trường  dotenv.config({ path: './stream_api.env' });
 dotenv.config();
-dotenv.config({ path: './stream_api.env' });
+
 
 const STREAM_API_KEY = process.env.STREAM_API_KEY;
 const STREAM_API_SECRET = process.env.STREAM_API_SECRET;
