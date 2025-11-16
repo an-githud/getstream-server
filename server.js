@@ -29,26 +29,42 @@ app.get("/", (req, res) => {
 });
 
 // endpoint tạo token lần đầu
-app.post("/create-user", (req, res) => {
+app.post("/create-user", async (req, res) => {
   const { userId, name } = req.body || {};
 
   if (!userId) {
     return res.status(400).json({ error: "userId is required" });
   }
 
-  const payload = { user_id: String(userId) };
-  const token = jwt.sign(payload, STREAM_API_SECRET, {
-    algorithm: "HS256",
-    expiresIn: "1h",
-  });
+  try {
+    // 1) Tạo/ cập nhật user bên Stream
+    await serverClient.upsertUsers([
+      {
+        id: String(userId),
+        name: name || "No name",
+      }
+    ]);
 
-  return res.json({
-    apiKey: STREAM_API_KEY,
-    token,
-    userId,
-    name,
-  });
+    // 2) Tạo token chính xác
+    const payload = { user_id: String(userId) };
+    const token = jwt.sign(payload, STREAM_API_SECRET, {
+      algorithm: "HS256",
+      expiresIn: "30d",
+    });
+
+    return res.json({
+      apiKey: STREAM_API_KEY,
+      token,
+      userId,
+      name,
+    });
+
+  } catch (err) {
+    console.error("❌ Stream upsertUser error:", err);
+    return res.status(500).json({ error: err.message });
+  }
 });
+
 
 // endpoint refresh token
 app.post("/refresh-stream-token", (req, res) => {
