@@ -109,6 +109,25 @@ app.post("/kick-user", async (req, res) => {
   }
 });
 
+// Lấy danh sách participants của call
+app.get("/call/participants/:callId", async (req, res) => {
+  try {
+    const callId = req.params.callId;
+
+    const call = serverClient.video.call("call_nhom_chung", callId);
+    const callInfo = await call.get(); 
+
+    return res.json({
+      callId,
+      participants: callInfo.participants
+    });
+
+  } catch (err) {
+    console.error("GET participants error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
