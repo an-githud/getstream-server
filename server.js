@@ -110,16 +110,18 @@ app.post("/kick-user", async (req, res) => {
   }
 });
 
-// Lấy chỉ danh sách userId của participants
+// Lấy danh sách participants ACTIVE trong call
 app.get("/call/participants/:callId", async (req, res) => {
   try {
     const callId = req.params.callId;
 
     const call = serverClient.video.call("call_nhom_chung", callId);
-    const callInfo = await call.get();
 
-    const ids = (callInfo?.participants || [])
-      .map(p => p.user_id || p.userId || p.id)
+    // API đúng để lấy participants đang ở trong phòng
+    const resp = await call.queryCallParticipants({});
+
+    const ids = (resp?.participants || [])
+      .map(p => p.user_id)
       .filter(Boolean);
 
     return res.json({
@@ -132,6 +134,7 @@ app.get("/call/participants/:callId", async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
