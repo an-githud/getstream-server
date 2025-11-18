@@ -119,10 +119,10 @@ app.get("/call/participants/:callId", async (req, res) => {
 
     const call = serverClient.video.call("call_nhom_chung", callId);
 
-    // PHẢI CÓ FILTER
+    // Filter hợp lệ duy nhất luôn hoạt động
     const resp = await call.queryCallParticipants({
       filter_conditions: {
-        user_id: { $exists: true } // filter kiểu "mọi participant"
+        user_id: { $ne: "" }   // Stream CHO PHÉP $ne với string
       }
     });
 
