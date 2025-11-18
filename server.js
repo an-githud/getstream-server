@@ -110,6 +110,8 @@ app.post("/kick-user", async (req, res) => {
   }
 });
 
+
+
 // Lấy danh sách participants ACTIVE trong call
 app.get("/call/participants/:callId", async (req, res) => {
   try {
@@ -117,8 +119,12 @@ app.get("/call/participants/:callId", async (req, res) => {
 
     const call = serverClient.video.call("call_nhom_chung", callId);
 
-    // API đúng để lấy participants đang ở trong phòng
-    const resp = await call.queryCallParticipants({});
+    // PHẢI CÓ FILTER
+    const resp = await call.queryCallParticipants({
+      filter_conditions: {
+        user_id: { $exists: true } // filter kiểu "mọi participant"
+      }
+    });
 
     const ids = (resp?.participants || [])
       .map(p => p.user_id)
@@ -134,6 +140,7 @@ app.get("/call/participants/:callId", async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
