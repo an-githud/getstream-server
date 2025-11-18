@@ -9,6 +9,7 @@ import { StreamClient } from "@stream-io/node-sdk";
 dotenv.config();
 
 
+
 const STREAM_API_KEY = process.env.STREAM_API_KEY;
 const STREAM_API_SECRET = process.env.STREAM_API_SECRET;
 
@@ -109,17 +110,21 @@ app.post("/kick-user", async (req, res) => {
   }
 });
 
-// Lấy danh sách participants của call
+// Lấy chỉ danh sách userId của participants
 app.get("/call/participants/:callId", async (req, res) => {
   try {
     const callId = req.params.callId;
 
     const call = serverClient.video.call("call_nhom_chung", callId);
-    const callInfo = await call.get(); 
+    const callInfo = await call.get();
+
+    const ids = (callInfo?.participants || [])
+      .map(p => p.user_id || p.userId || p.id)
+      .filter(Boolean);
 
     return res.json({
       callId,
-      participants: callInfo.participants
+      userIds: ids
     });
 
   } catch (err) {
@@ -127,6 +132,7 @@ app.get("/call/participants/:callId", async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 
 const port = process.env.PORT || 3000;
