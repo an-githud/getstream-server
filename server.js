@@ -116,47 +116,22 @@ app.post("/kick-user", async (req, res) => {
 app.get("/call/participants/:callId", async (req, res) => {
   try {
     const callId = req.params.callId;
-
     const call = serverClient.video.call("call_nhom_chung", callId);
 
     let resp;
     try {
-      // ❗ KHÔNG dùng filter_conditions → Stream không cho phép
-      resp = await call.queryCallParticipants({
-        limit: 100
-      });
+      resp = await call.queryCallParticipants({ limit: 100 }); // KHÔNG truyền filter_conditions
     } catch (err) {
       console.error("❌ queryCallParticipants error:", err);
-
-      // nếu Stream trả error trong response body → log chi tiết
       if (err.response) {
-        try {
-          console.error(
-            "ERR RESPONSE DATA:",
-            JSON.stringify(err.response.data, null, 2)
-          );
-        } catch (_) { }
+        try { console.error("ERR RESPONSE DATA:", JSON.stringify(err.response.data, null, 2)); } catch (_) {}
       }
-
-      return res.status(500).json({
-        error: err.message || "queryCallParticipants failed"
-      });
+      return res.status(500).json({ error: err.message || "queryCallParticipants failed" });
     }
 
-    // Nếu response không hợp lệ
-    if (!resp || !resp.participants) {
-      return res.json({ callId, userIds: [] });
-    }
-
-    // Lấy user_id từ participants
-    const ids = resp.participants
-      .map(p => p.user_id)
-      .filter(Boolean);
-
-    return res.json({
-      callId,
-      userIds: ids
-    });
+    if (!resp || !resp.participants) return res.json({ callId, userIds: [] });
+    const ids = resp.participants.map(p => p.user_id).filter(Boolean);
+    return res.json({ callId, userIds: ids });
 
   } catch (err) {
     console.error("❌ GET participants error (outer):", err);
